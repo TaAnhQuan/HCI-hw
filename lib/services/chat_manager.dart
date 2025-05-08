@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:app/constants/prompt_constants.dart';
 import 'package:app/services/embeddings_service.dart';
 import 'package:intl/intl.dart';
+import 'package:mcp_dart/mcp_dart.dart';
 
 import '../models/chat_session.dart';
 import '../models/record_entity.dart';
@@ -18,6 +19,7 @@ class ChatManager {
 
   late LLM _llm;
   late LLM _llm4SecondRound;
+  late final Client _client;
 
   // Receive ChatSession from external sources
   ChatManager();

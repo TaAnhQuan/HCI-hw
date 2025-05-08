@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:http/http.dart' as http;
+import 'package:mcp_dart/mcp_dart.dart';
 import '../constants/prompt_constants.dart';
 import '../models/llm_config.dart';
 import 'objectbox_service.dart';
@@ -154,4 +155,77 @@ class LLM {
   void setSystemPrompt({required String systemPrompt}) {
     this.systemPrompt = systemPrompt;
   }
+
+  void mcpServer() async{
+    final server = McpServer(
+      const Implementation(name: "qwen-mcp-server", version: "1.0.0"),
+      options: const ServerOptions(
+        capabilities: ServerCapabilities(
+          tools: ServerCapabilitiesTools(),
+          resources: ServerCapabilitiesResources()
+        )
+      )
+    );
+
+    server.tool(
+        "wikiSearch",
+        description: "Search Wikipedia and return a brief summary",
+        inputSchemaProperties: {
+          'query': {'type': 'string'}
+        },
+        callback: ({args, extra}) async {
+          final query = args!['query'] as String;
+          final searchUri = Uri.https(
+            'en.wikipedia.org',
+            '/w/api.php',
+            {
+              'action': 'query',
+              'list': 'search',
+              'srsearch': 'query',
+              'utf8': '1',
+              'format': 'json'
+            }
+          );
+          final searchRes = await http.get(searchUri);
+          if (searchRes.statusCode != 200){
+            throw Exception('Wikipedia search failed: ${searchRes.statusCode}');
+          }
+          final searchData = jsonDecode(searchRes.body);
+          final hits = (searchData['query']['search'] as List).cast<Map<String, dynamic>>();
+          if (hits.isEmpty){
+            return CallToolResult(
+                content: [TextContent(text: 'No Wikipedia articles found for "$query". ')],
+            );
+          }
+
+          final topTitle = hits.first['title'] as String;
+          final summaryUri = Uri.https(
+            'en.wikipedia.org',
+            '/api/rest_v1/page/summary/$topTitle',
+          );
+          final summaryRes = await http.get(summaryUri);
+          if (summaryRes.statusCode != 200){
+            throw Exception('Summary fetch failed: ${summaryRes.statusCode}');
+          }
+          final summaryData = jsonDecode(summaryRes.body);
+          final extract = summaryData['extract'] as String;
+          final resultText = '📄 **$topTitle**\n\n'
+              '${extract.length > 500 ? '${extract.substring(0, 500)}…' : extract}';
+          
+          return CallToolResult(
+              content: [TextContent(text: resultText)]
+          );
+        }
+    );
+
+    // Start the HTTP server transport on localhost:8080
+    // This sets up an SSE/HTTP endpoint for MCP clients to connect.
+    await server.connect(StreamableHTTPServerTransport(
+      options: StreamableHTTPServerTransportOptions(
+        enableJsonResponse: true,
+      ),
+    ));
+
+    print('MCP server listening on http://localhost:8080 (press Ctrl+C to stop)');
+    }
 }
