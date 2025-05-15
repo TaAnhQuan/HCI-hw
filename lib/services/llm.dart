@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
+import 'dart:io';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:http/http.dart' as http;
 import 'package:mcp_dart/mcp_dart.dart';
 import '../constants/prompt_constants.dart';
 import '../models/llm_config.dart';
 import 'objectbox_service.dart';
+import 'package:mcp_dart/mcp_dart.dart' as mcp_dart;
 
 
 class LLM {
@@ -14,6 +16,9 @@ class LLM {
   late String apiKey;
   late String baseUrl;
   late String systemPrompt;
+  final mcp_dart.Client mcp = Client(const Implementation(name: "gemini-client", version: "1.0.0"));
+  mcp_dart.StdioClientTransport? transport;
+  List<Tool> tools = [];
 
   static final String defaultBaseUrl = 'https://one-api.bud.inc/v1/chat/completions';
 

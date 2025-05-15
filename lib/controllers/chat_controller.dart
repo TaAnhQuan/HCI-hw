@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'dart:developer' as dev;
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants/voice_constants.dart';
 import '../models/record_entity.dart';
 import '../services/chat_manager.dart';
@@ -23,6 +24,9 @@ class ChatController extends ChangeNotifier{
   final Function onNewMessage;
   final ScrollController scrollController = ScrollController();
   Map<String, String?> userToResponseMap = {};
+  late final WebSocketChannel _mcpChannel;
+  final Map<int, Completer<String>> _pendingRequests = {};
+  late final StreamSubscription _mcpSubscription;
 
   int _currentPage = 0;
   int countHelp = 0;
@@ -37,9 +41,39 @@ class ChatController extends ChangeNotifier{
   Future<void> _initialize() async {
     chatManager = ChatManager();
     chatManager.init(selectedModel: _selectedModel);
+    _mcpChannel = WebSocketChannel.connect(Uri.parse('ws://10.0.2.2:8080'));
+    _mcpSubscription = _mcpChannel.stream.listen((message) {
+      final response = jsonDecode(message);
+      final id = response['id'];
+      final completer = _pendingRequests[id];
+      if (completer != null) {
+        if (response['error'] != null) {
+          completer.complete('Error: ${response['error']['message']}');
+        } else {
+          final content = response['result']['content'][0]['text'];
+          completer.complete(content);
+        }
+        _pendingRequests.remove(id);
+      }
+    });
 
     await loadMoreMessages(reset: true);
     FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
+  }
+
+  Future<String> _callMCPTool(String method, Map<String, dynamic> params) async {
+    final requestId = DateTime.now().microsecondsSinceEpoch;
+    final completer = Completer<String>();
+    _pendingRequests[requestId] = completer;
+
+    _mcpChannel.sink.add(jsonEncode({
+      'jsonrpc': '2.0',
+      'id': requestId,
+      'method': method,
+      'params': params,
+    }));
+
+    return await completer.future;
   }
 
   Future<void> loadMoreMessages({bool reset = false}) async {
@@ -266,7 +300,7 @@ class ChatController extends ChangeNotifier{
 
       String? responseId;
 
-      chatManager.createStreamingRequest(text: userInput).listen((jsonString) {
+      chatManager.createStreamingRequest(text: userInput).listen((jsonString) async {
           try {
             final jsonObj = jsonDecode(jsonString);
 
@@ -278,6 +312,11 @@ class ChatController extends ChangeNotifier{
             if (jsonObj.containsKey('delta')) {
               final delta = jsonObj['delta'];
               updateMessageText(responseId!, delta);
+            }else if (jsonObj.containsKey['tool']){
+              final tool = jsonObj['tool'];
+              final args = jsonObj['args'] ?? {};
+              final result = await _callMCPTool(tool, args);
+              updateMessageText(responseId!, result);
             }
 
             if (jsonObj['isFinished'] == true) {
