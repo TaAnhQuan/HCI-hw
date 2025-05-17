@@ -17,23 +17,4 @@ class MyAuthController extends GetxController {
       log("Unknown error: ${e.code} ${e.message}");
     }
   }
-
-  Future<String> fetchLlmToken() async {
-    final authController = Get.find<MyAuthController>();
-    final authToken = await authController.userCredential.value?.user?.getIdToken();
-
-    final response = await http.get(
-      Uri.parse('https://token.one-api.bud.inc/'),
-      headers: {'Authorization': 'Bearer $authToken'},
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      if (data.containsKey('token')) {
-        log("Retrieved Llm token: ${data['token']}");
-        return data['token'];
-      }
-    }
-    throw Exception("Failed to retrieve Llm token.");
-  }
 }

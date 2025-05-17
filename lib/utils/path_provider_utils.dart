@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
-class PathProviderService {
+class PathProviderUtil {
   /// get App Save directory
   static Future<String> getAppSaveDirectory() async {
     String? path;
@@ -16,7 +16,7 @@ class PathProviderService {
   }
 
   /// * Android
-  ///   "/data/user/0/inc.bud.app/cache"
+  ///   "/data/user/0/inc.buddie.app/cache"
   static Future<String> getTemporaryPath() async {
     final directory = await getTemporaryDirectory();
     String path = directory.path;
@@ -25,7 +25,7 @@ class PathProviderService {
   }
 
   /// * Android
-  ///   "/data/user/0/inc.bud.app/files"
+  ///   "/data/user/0/inc.buddie.app/files"
   static Future<String> getApplicationSupportPath() async {
     final directory = await getApplicationSupportDirectory();
     String path = directory.path;
@@ -34,7 +34,7 @@ class PathProviderService {
   }
 
   /// * Android
-  ///   "/data/user/0/inc.bud.app/app_flutter"
+  ///   "/data/user/0/inc.buddie.app/app_flutter"
   /// * iOS
   ///   "/var/mobile/Containers/Data/Application/A7CA544C-8C07-41CA-B2DD-C79CC221965F/Documents"
   static Future<String> getApplicationDocumentsPath() async {
@@ -45,7 +45,7 @@ class PathProviderService {
   }
 
   /// * Android
-  ///   "/data/user/0/inc.bud.app/cache"
+  ///   "/data/user/0/inc.buddie.app/cache"
   static Future<String> getApplicationCachePath() async {
     final directory = await getApplicationCacheDirectory();
     String path = directory.path;
@@ -54,7 +54,7 @@ class PathProviderService {
   }
 
   /// * Android
-  ///   "/storage/emulated/0/Android/data/inc.bud.app/files/downloads"
+  ///   "/storage/emulated/0/Android/data/inc.buddie.app/files/downloads"
   static Future<String?> getDownloadsPath() async {
     final directory = await getDownloadsDirectory();
     String? path = directory?.path;
@@ -63,7 +63,7 @@ class PathProviderService {
   }
 
   /// * Android Only
-  ///  "/storage/emulated/0/Android/data/inc.bud.app/files"
+  ///  "/storage/emulated/0/Android/data/inc.buddie.app/files"
   static Future<String?> getExternalStoragePath() async {
     final directory = await getExternalStorageDirectory();
     String? path = directory?.path;

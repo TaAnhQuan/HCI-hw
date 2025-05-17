@@ -1,20 +1,22 @@
-import 'package:app/controllers/style_controller.dart';
+import 'dart:io';
 import 'package:app/extension/media_query_data_extension.dart';
 import 'package:app/utils/route_utils.dart';
 import 'package:app/views/components/chat_list_tile.dart';
 import 'package:app/views/components/home_app_bar.dart';
 import 'package:app/views/components/home_bottom_bar.dart';
-import 'package:app/views/ui/app_backgroud.dart';
+import 'package:app/views/ui/app_background.dart';
 import 'package:easy_refresh/easy_refresh.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:keyboard_dismisser/keyboard_dismisser.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
-import '../../constants/prompt_constants.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import '../../controllers/chat_controller.dart';
 import '../../controllers/record_controller.dart';
+import '../../utils/assets_util.dart';
 
 class HomeChatScreen extends StatefulWidget {
   final RecordScreenController? controller;
@@ -25,7 +27,8 @@ class HomeChatScreen extends StatefulWidget {
   State<HomeChatScreen> createState() => _HomeChatScreenState();
 }
 
-class _HomeChatScreenState extends State<HomeChatScreen> {
+class _HomeChatScreenState extends State<HomeChatScreen>
+    with WidgetsBindingObserver {
   late ChatController _chatController;
   final FocusNode _focusNode = FocusNode();
   late RecordScreenController _audioController;
@@ -41,22 +44,78 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
   );
 
   final EdgeInsets chatPadding =
-      EdgeInsets.symmetric(horizontal: 18.sp, vertical: 12.sp);
+  EdgeInsets.symmetric(horizontal: 18.sp, vertical: 12.sp);
 
   final double lineSpace = 16.sp;
+
+  List<BluetoothDevice> pairedDevices = [];
+  bool _paired = false;
+  bool _isBottomSheetShown = false;
 
   @override
   void initState() {
     super.initState();
     _init();
+    // Register this class as an observer to listen for keyboard changes
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      currentBottomInset = MediaQuery.of(context).viewInsets.bottom;
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _focusNode.dispose();
     _chatController.dispose();
     _listenable.removeListener(_onHeaderChange);
     super.dispose();
+  }
+
+  double currentBottomInset = 0;
+
+  @override
+  void didChangeMetrics() {
+    // This is called when the metrics change (including keyboard visibility)
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final diff = bottomInset - currentBottomInset;
+    currentBottomInset = bottomInset;
+    double jumpOffset = _chatController.scrollController.offset + diff;
+
+    if (jumpOffset >= 0 &&
+        jumpOffset <=
+            _chatController.scrollController.position.maxScrollExtent) {
+      _chatController.scrollController.jumpTo(jumpOffset);
+    }
+  }
+
+  Future<void> _getPairedDevices() async {
+    if (Platform.isIOS) {
+      // pairedDevices = await FlutterBluePlus.systemDevices([]);
+      // if (pairedDevices.isEmpty) {
+      //   pairedDevices = await FlutterBluePlus.bondedDevices;
+      // }
+      _paired = true;
+    } else if (Platform.isAndroid) {
+      bool found = false;
+      try {
+        pairedDevices = await FlutterBluePlus.bondedDevices;
+      } catch (e) {
+        debugPrint('Cannot find bounded devices: $e');
+        _paired = true;
+        return;
+      }
+
+
+      for (final pairedDevice in pairedDevices) {
+        if (pairedDevice.platformName.startsWith("Buddie")) {
+          found = true;
+          break;
+        }
+      }
+
+      _paired = found;
+    }
   }
 
   void _init() {
@@ -71,7 +130,47 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
     _chatController = ChatController(
       onNewMessage: onNewMessage,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      final isFirstLaunch = prefs.getBool("isFirstLaunch") ?? true;
+      if (isFirstLaunch) {
+        await prefs.setBool("isFirstLaunch", false);
+        debugPrint('init recording');
+      } else {
+        debugPrint('start recording');
+      }
+      FlutterForegroundTask.sendDataToTask('startRecording');
+    });
   }
+
+  // void _showEarphoneConnectDialog() async {
+  //   bool? connect = await showDialog(
+  //     context: context,
+  //     builder: (context) {
+  //       return AlertDialog(
+  //         title: const EarphoneDialog(),
+  //         actions: [
+  //           TextButton(
+  //             onPressed: () => context.pop(false),
+  //             child: const Text('cancel'),
+  //           ),
+  //           TextButton(
+  //             onPressed: () => context.pop(true),
+  //             child: const Text('connect'),
+  //           ),
+  //         ],
+  //       );
+  //     },
+  //   );
+  //   if (connect == true) {
+  //     showDialog(
+  //       context: context,
+  //       builder: (context) {
+  //         // return BLEScreen();
+  //       },
+  //     );
+  //   }
+  // }
 
   void _onHeaderChange() {
     final state = _listenable.value;
@@ -94,48 +193,11 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
     }
   }
 
-  double _calculateMsgHeight(
-    BuildContext context,
-    BoxConstraints constraints,
-    String text,
-  ) {
-    BoxConstraints textConstraints = constraints.copyWith(
-      maxWidth: constraints.maxWidth -
-          ChatListTile.textWidthSpace -
-          chatPadding.horizontal,
-    );
-    double textHeight = _calculateTextHeight(
-      context,
-      textConstraints,
-      text: text,
-      textStyle: textTextStyle,
-    );
-
-    double initH = 2 + chatPadding.vertical + textHeight + lineSpace;
-    return initH;
-  }
-
-  double _calculateTextHeight(
-    BuildContext context,
-    BoxConstraints constraints, {
-    String text = '',
-    required TextStyle textStyle,
-    List<InlineSpan> children = const [],
-  }) {
-    final span = TextSpan(text: text, style: textStyle, children: children);
-
-    final richTextWidget = Text.rich(span).build(context) as RichText;
-    final renderObject = richTextWidget.createRenderObject(context);
-    renderObject.layout(constraints);
-    double height =
-        renderObject.computeMinIntrinsicHeight(constraints.maxWidth);
-    return height;
-  }
-
   Widget _buildMsg(Map<String, dynamic> message) {
     final role = message['isUser'];
     final text = message['text'];
-    return Padding(
+    final id = message['id'];
+    Widget body = Padding(
       padding: EdgeInsets.only(bottom: lineSpace),
       child: ChatListTile(
         onLongPress: () => _chatController.copyToClipboard(context, text),
@@ -145,6 +207,21 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
         padding: chatPadding,
       ),
     );
+
+    if (_chatController.unReadMessageId.value.contains(id)) {
+      body = VisibilityDetector(
+        key: UniqueKey(),
+        onVisibilityChanged: (info) {
+          if (info.visibleFraction == 1) {
+            _chatController.unReadMessageId.value.remove(id);
+            _chatController.unReadMessageId.notifyListeners();
+          }
+        },
+        child: body,
+      );
+    }
+
+    return body;
   }
 
   void _onClickKeyboard() {
@@ -155,10 +232,7 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
     }
   }
 
-  void _onClickBluetooth() {
-    setState(() {
-      _bluetoothConnected = !_bluetoothConnected;
-    });
+  void _onClickBluetooth() async {
   }
 
   void _onClickRecord() {
@@ -172,31 +246,49 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
   }
 
   void _onClickHelp() {
-    _chatController.sendMessage(initialText: systemPromptOfHelp);
+    _chatController.askHelp();
   }
 
   void _onClickBottomRight() {
     _focusNode.unfocus();
-    context.pushNamed(RouteName.journal);
+    context.pushNamed(RouteName.meeting_list);
+    // context.pushNamed(RouteName.journal);
   }
 
-  bool _checkMessageOverflowScreen(BoxConstraints constraints) {
-    bool overflow = false;
-    double heightTmp = 0.0;
-    for (int i = 0; i < _chatController.messages.length; i++) {
-      final text = _chatController.messages[i]['text'];
-      var hi = _calculateMsgHeight(context, constraints, text);
-      heightTmp += hi;
-      if (heightTmp >= constraints.maxHeight) {
-        overflow = true;
-        break;
-      }
-    }
-    return overflow;
-  }
+  var centerKey = GlobalKey();
 
   @override
   Widget build(BuildContext context) {
+    final slivers = <Widget>[];
+    final history = _chatController.historyMessages.reversed.toList();
+    slivers.add(SliverList(
+      delegate: SliverChildBuilderDelegate(
+            (BuildContext context, int i) {
+          if (i > history.length) {
+            return SizedBox();
+          }
+          return _buildMsg(history[i]);
+        },
+        childCount: history.length,
+      ),
+    ));
+
+    slivers.add(SliverPadding(
+      padding: EdgeInsets.zero,
+      key: centerKey,
+    ));
+    final newMessage = _chatController.newMessages.reversed.toList();
+    slivers.add(SliverList(
+      delegate: SliverChildBuilderDelegate(
+            (BuildContext context, int i) {
+          if (i > newMessage.length) {
+            return SizedBox();
+          }
+          return _buildMsg(newMessage[i]);
+        },
+        childCount: newMessage.length,
+      ),
+    ));
     return KeyboardDismisser(
       child: Scaffold(
         resizeToAvoidBottomInset: true,
@@ -223,60 +315,49 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
                     padding: EdgeInsets.only(
                       bottom: 8.sp,
                     ),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final overflow =
-                            _checkMessageOverflowScreen(constraints);
-
-                        final messageList = _chatController.messages;
-
-                        return EasyRefresh(
-                          header: const MaterialHeader(triggerOffset: 30.0),
-                          footer: const MaterialFooter(triggerOffset: 30.0),
-                          clipBehavior: Clip.none,
-                          key: ValueKey(_chatController.refreshCount),
-                          onLoad: overflow
-                              ? () async {
-                                  return _chatController.loadMoreMessages();
-                                }
-                              : null,
-                          child: ClipRect(
-                            child: CustomScrollView(
-                              controller: _chatController.scrollController,
-                              reverse: true,
-                              shrinkWrap: !overflow,
-                              clipBehavior: Clip.none,
-                              slivers: [
-                                overflow
-                                    ? SliverList(
-                                        delegate: SliverChildBuilderDelegate(
-                                          (BuildContext context, int i){
-                                            if(i>=messageList.length){
-                                              return SizedBox();
-                                            }
-                                            return  _buildMsg(messageList[i]);
-                                            },
-                                          childCount: messageList.length,
-                                        ),
-                                      )
-                                    : SliverToBoxAdapter(
-                                        child: ConstrainedBox(
-                                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                                          child: Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: messageList
-                                                .map((e) => _buildMsg(e))
-                                                .toList()
-                                                .reversed
-                                                .toList(),
-                                          ),
-                                        ),
+                    child: Stack(
+                      children: [
+                        RefreshIndicator(
+                            displacement: 10,
+                            onRefresh: _chatController.loadMoreMessages,
+                            child: ClipRect(
+                              child: CustomScrollView(
+                                controller: _chatController.scrollController,
+                                clipBehavior: Clip.none,
+                                center: centerKey,
+                                cacheExtent: 3,
+                                slivers: slivers,
+                              ),
+                            )),
+                        Align(
+                          alignment: AlignmentDirectional.bottomEnd,
+                          child: ValueListenableBuilder(
+                              valueListenable: _chatController.unReadMessageId,
+                              builder: (context, ids, _) {
+                                if (ids.isEmpty) return const SizedBox();
+                                return GestureDetector(
+                                  onTap: () {
+                                    _chatController.unReadMessageId.value = {};
+                                    _chatController.firstScrollToBottom();
+                                  },
+                                  child: Container(
+                                    width: 30,
+                                    height: 30,
+                                    decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(30),
+                                        color: Colors.blue),
+                                    child: Center(
+                                      child: Text(
+                                        ids.length.toString(),
+                                        style: const TextStyle(
+                                            color: Colors.white),
                                       ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
+                                    ),
+                                  ),
+                                );
+                              }),
+                        )
+                      ],
                     ),
                   ),
                 ),
@@ -289,12 +370,36 @@ class _HomeChatScreenState extends State<HomeChatScreen> {
                   onTapHelp: _onClickHelp,
                   onTapRight: _onClickBottomRight,
                   isRecording: _audioController.isRecording,
+                  isSpeakValueNotifier: _chatController.isSpeakValueNotifier,
                 ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class EarphoneDialog extends StatelessWidget {
+  final GestureTapCallback? onClickConnect;
+
+  const EarphoneDialog({
+    super.key,
+    this.onClickConnect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Image.asset(
+          AssetsUtil.logo_hd,
+          width: 116.sp,
+          height: 116.sp,
+        ),
+      ],
     );
   }
 }

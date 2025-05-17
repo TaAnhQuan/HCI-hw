@@ -123,7 +123,7 @@ class ChatContainer extends StatelessWidget {
       decoration: decoration.copyWith(
         borderRadius: BorderRadius.circular(radius),
         border: Border.all(
-          width: 1,
+          width: 0.5,
           color: isLightMode ? Colors.white : Colors.black,
         ),
       ),

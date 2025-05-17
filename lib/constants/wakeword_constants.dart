@@ -1,6 +1,6 @@
 class wakeword_constants{
   static const List<String> wakeWordStartDialog = ['buddie', 'buddy', 'hi, buddy', 'hi, buddie', 'body'];
-  static const List<String> wakeWordEndDialog = ['just listen', 'buddie, just listen', 'just listen, buddie', 'buddy, just listen', 'just listen buddy'];
+  static const List<String> wakeWordEndDialog = ['just listen', 'just a listen', 'just listening', 'just the listen'];
   static const List<String> voiceVerificationPhrases = [
     'Hey, let’s hear your voice! Say: \n"Buddie, what\'s on my schedule today?"', 
     'Great! Next, could you say: \n"Buddie, what were the action items from the meeting?"', 

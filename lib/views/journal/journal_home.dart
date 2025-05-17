@@ -100,16 +100,6 @@ class GridEntry extends StatelessWidget {
           icon: AssetsUtil.getIconPath(mode: mode, icon: AssetsUtil.icon_journal_grid_todo),
           title: 'to-do list',
         ),
-        GridItem(
-          onTap: () => context.pushNamed(RouteName.user_model),
-          bgColors: const [
-            Color(0xFFD9F7FA),
-            Color(0xFFECFAFD),
-            Color(0xFFDCEFF7),
-          ],
-          icon: AssetsUtil.getIconPath(mode: mode, icon: AssetsUtil.icon_user),
-          title: 'User model',
-        ),
       ],
     );
   }

@@ -14,12 +14,14 @@ import '../services/chat_manager.dart';
 import 'package:uuid/uuid.dart';
 import '../services/objectbox_service.dart';
 
-class ChatController extends ChangeNotifier{
-
+class ChatController extends ChangeNotifier {
   late final ChatManager chatManager;
+  late final ChatManager chatHelp;
   final String _selectedModel = 'qwen-max';
+  final String helpMessage = 'Based on historical information, I think the following may help you:\n\n';
   final ObjectBoxService _objectBoxService = ObjectBoxService();
-  final List<Map<String, dynamic>> messages = [];
+  final List<Map<String, dynamic>> historyMessages = [];
+  final List<Map<String, dynamic>> newMessages = [];
   final TextEditingController textController = TextEditingController();
   final Function onNewMessage;
   final ScrollController scrollController = ScrollController();
@@ -28,11 +30,12 @@ class ChatController extends ChangeNotifier{
   final Map<int, Completer<String>> _pendingRequests = {};
   late final StreamSubscription _mcpSubscription;
 
-  int _currentPage = 0;
-  int countHelp = 0;
-  static const int _pageSize = 10;
+  final ValueNotifier<Set<String>> unReadMessageId = ValueNotifier({});
+
+  static const int _pageSize = 25;
   bool isLoading = false;
   bool hasMoreMessages = true;
+  bool bleConnection = false;
 
   ChatController({required this.onNewMessage}) {
     _initialize();
@@ -40,7 +43,9 @@ class ChatController extends ChangeNotifier{
 
   Future<void> _initialize() async {
     chatManager = ChatManager();
-    chatManager.init(selectedModel: _selectedModel);
+    chatHelp = ChatManager();
+    await chatManager.init(selectedModel: _selectedModel, systemPrompt: '$systemPromptOfChat\n\n${systemPromptOfScenario['text']}');
+    await chatHelp.init(selectedModel: _selectedModel, systemPrompt:  systemPromptOfHelp);
     _mcpChannel = WebSocketChannel.connect(Uri.parse('ws://10.0.2.2:8080'));
     _mcpSubscription = _mcpChannel.stream.listen((message) {
       final response = jsonDecode(message);
@@ -82,30 +87,32 @@ class ChatController extends ChangeNotifier{
     isLoading = true;
 
     if (reset) {
-      _currentPage = 0;
-      messages.clear();
+      historyMessages.clear();
+      newMessages.clear();
       hasMoreMessages = true;
       chatManager.updateChatHistory();
+      chatHelp.updateChatHistory();
     }
 
     List<RecordEntity>? records = _objectBoxService.getChatRecords(
-      offset: messages.length,
+      offset: historyMessages.length + newMessages.length,
       limit: _pageSize,
     );
 
     if (records != null && records.isNotEmpty) {
-      _currentPage++;
-      List<Map<String, dynamic>> newMessages = records.map((record) {
+      List<Map<String, dynamic>> loadMessages = records.map((record) {
         return {
           'id': Uuid().v4(),
           'text': record.content,
           'isUser': record.role,
         };
       }).toList();
-
-      messages.insertAll(messages.length, newMessages);
-      if (reset) {
-        refreshCount++;
+      if (newMessages.isEmpty) {
+        newMessages.insertAll(0, loadMessages.toList());
+        tryNotifyListeners();
+        firstScrollToBottom();
+      } else {
+        historyMessages.insertAll(0, loadMessages.reversed.toList());
       }
       tryNotifyListeners();
     } else {
@@ -115,42 +122,10 @@ class ChatController extends ChangeNotifier{
     isLoading = false;
   }
 
-  int refreshCount = 0;
-
-  Timer? _typingTimer;
-
-  void startTypingAnimation() {
-    if (_typingTimer == null || !_typingTimer!.isActive) {
-      _typingTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-        if (messages.isEmpty) {
-          messages.insert(0, {
-            'id': 'typing_placeholder',
-            'text': '.',
-            'isUser': 'user',
-          });
-          return;
-        }
-        if (messages.isNotEmpty && messages[0]['id'] == 'typing_placeholder') {
-          messages[0].moveToNextDot();
-        } else if (messages.isEmpty || (messages.isNotEmpty && messages[0]['id'] != 'typing_placeholder')) {
-          messages.insert(0, {
-            'id': 'typing_placeholder',
-            'text': '.',
-            'isUser': 'user',
-          });
-        }
-        tryNotifyListeners();
-      });
-    }
-  }
-
-  void stopTypingAnimation() {
-    _typingTimer?.cancel();
-    _typingTimer = null;
-  }
+  ValueNotifier<bool> isSpeakValueNotifier = ValueNotifier(false);
 
   void _onReceiveTaskData(Object data) {
-    if (data == 'refresh'){
+    if (data == 'refresh') {
       loadMoreMessages(reset: true);
       return;
     }
@@ -167,93 +142,98 @@ class ChatController extends ChangeNotifier{
       final isSpeaking = data['isVadDetected'] as bool?;
 
       if (isSpeaking != null && isSpeaking) {
-        startTypingAnimation();
+        isSpeakValueNotifier.value = true;
+        if (!bleConnection) {
+          FlutterForegroundTask.sendDataToMain({
+            'connectionState': true
+          });
+          FlutterForegroundTask.sendDataToTask("InitTTS");
+          bleConnection = true;
+        }
       } else if (isSpeaking != null && !isSpeaking) {
-        stopTypingAnimation();
-        int typingIndex = messages.indexWhere((msg) => msg['id'] == 'typing_placeholder');
-        if (typingIndex != -1) {
-          messages.removeAt(typingIndex);
-          tryNotifyListeners();
+        isSpeakValueNotifier.value = false;
+        if (!bleConnection) {
+          FlutterForegroundTask.sendDataToMain({
+            'connectionState': true
+          });
+          FlutterForegroundTask.sendDataToTask("InitTTS");
+          bleConnection = true;
         }
       }
 
-      if (isEndpoint != null && text != null && isMeeting != null && inDialogMode != null && !isMeeting  && !inDialogMode!) {
-        int typingIndex = messages.indexWhere((msg) => msg['id'] == 'typing_placeholder');
-        if (typingIndex != -1) {
-          stopTypingAnimation();
-          messages.removeAt(typingIndex);
-        }
-        messages.insert(0, {
+      if (isEndpoint != null &&
+          text != null &&
+          isMeeting != null &&
+          inDialogMode != null &&
+          !isMeeting &&
+          !inDialogMode!) {
+        isSpeakValueNotifier.value = false;
+        insertNewMessage({
           'id': const Uuid().v4(),
           'text': text,
           'isUser': speaker,
         });
-        tryNotifyListeners();
       }
 
-      if (isEndpoint != null && text != null && isMeeting != null && isMeeting) {
-        int typingIndex = messages.indexWhere((msg) => msg['id'] == 'typing_placeholder');
-        if (typingIndex != -1) {
-          stopTypingAnimation();
-          messages.removeAt(typingIndex);
-        }
-        messages.insert(0, {
+      if (isEndpoint != null &&
+          text != null &&
+          isMeeting != null &&
+          isMeeting) {
+        isSpeakValueNotifier.value = false;
+        insertNewMessage({
           'id': const Uuid().v4(),
           'text': text,
-          'isUser': 'user',
+          'isUser': speaker,
         });
-        tryNotifyListeners();
-        countHelp = countHelp + 1;
-        if (countHelp == 6) {
-          chatManager.updateChatHistory();
-          sendMessage(initialText: systemPromptOfHelp);
-          countHelp = 0;
-        }
       }
 
-      if (isEndpoint != null && text != null && inDialogMode != null && inDialogMode) {
-        int typingIndex = messages.indexWhere((msg) => msg['id'] == 'typing_placeholder');
-
-        if (isEndpoint == true) {
-          if (typingIndex != -1) {
-            stopTypingAnimation();
-            messages.removeAt(typingIndex);
-          }
+      if (isEndpoint != null &&
+          text != null &&
+          inDialogMode != null &&
+          inDialogMode) {
+        if(isEndpoint == true){
+          isSpeakValueNotifier.value = false;
           String userInputId = const Uuid().v4();
-          messages.insert(0, {
+          insertNewMessage({
             'id': userInputId,
             'text': text,
-            'isUser': 'user',
+            'isUser': speaker,
           });
           userToResponseMap[userInputId] = null;
-          tryNotifyListeners();
         }
       }
 
       if (isFinished != null && delta != null) {
-        int userIndex = messages.indexWhere((msg) => msg['text'] == currentText && msg['isUser'] == 'user');
+        int userIndex = newMessages.indexWhere(
+                (msg) => msg['text'] == currentText && msg['isUser'] == 'user');
 
         if (userIndex != -1) {
-          String? responseId = userToResponseMap[messages[userIndex]['id']];
+          String? responseId = userToResponseMap[newMessages[userIndex]['id']];
+          bool isInBottom = checkInBottom();
 
           if (responseId == null) {
             responseId = const Uuid().v4();
-            userToResponseMap[messages[userIndex]['id']] = responseId;
-            messages.insert(0,{
+            userToResponseMap[newMessages[userIndex]['id']] = responseId;
+            newMessages.insert(0, {
               'id': responseId,
               'text': '',
               'isUser': 'assistant',
             });
           }
 
-          int botIndex = messages.indexWhere((msg) => msg['id'] == responseId);
+          int botIndex =
+          newMessages.indexWhere((msg) => msg['id'] == responseId);
           if (botIndex != -1) {
-            messages[botIndex]['text'] += "$delta ";
+            newMessages[botIndex]['text'] += "$delta ";
             tryNotifyListeners();
 
+            if (isInBottom) {
+              firstScrollToBottom();
+            }
             if (isFinished) {
-              messages[botIndex]['text'] = messages[botIndex]['text'].trim();
-              userToResponseMap.remove(messages[userIndex]['id']);
+              newMessages[botIndex]['text'] =
+                  newMessages[botIndex]['text'].trim();
+              userToResponseMap.remove(newMessages[userIndex]['id']);
             }
           }
         }
@@ -261,7 +241,7 @@ class ChatController extends ChangeNotifier{
     }
   }
 
-  tryNotifyListeners(){
+  tryNotifyListeners() {
     onNewMessage();
     if (hasListeners) {
       notifyListeners();
@@ -270,48 +250,74 @@ class ChatController extends ChangeNotifier{
 
   Future<void> sendMessage({String? initialText}) async {
     String text = initialText ?? textController.text;
-    String displayText;
 
     if (text.isNotEmpty) {
       textController.clear();
-      if (text == systemPromptOfHelp) {
-        displayText = "Help me Buddie.";
-        chatManager.updateChatHistory();
-      } else {
-        displayText = text;
-      }
-      messages.insert(0, {
+
+      insertNewMessage({
         'id': const Uuid().v4(),
-        'text': displayText,
+        'text': text,
         'isUser': 'user',
       });
-      tryNotifyListeners();
-      _objectBoxService.insertDialogueRecord(RecordEntity(role: 'user', content: displayText));
-      _scrollToBottom();
+      _objectBoxService.insertDialogueRecord(
+          RecordEntity(role: 'user', content: text));
+      firstScrollToBottom();
 
-      chatManager.addChatSession('user', displayText);
+      chatManager.addChatSession('user', text);
       await _getBotResponse(text);
     }
   }
 
-  Future<void> _getBotResponse(String userInput) async {
+  Future<void> askHelp() async {
+    String text = "Please help me";
+
+    chatHelp.updateChatHistory();
+
+    if (text.isNotEmpty) {
+      textController.clear();
+
+      insertNewMessage({
+        'id': const Uuid().v4(),
+        'text': 'Help me Buddie',
+        'isUser': 'user',
+      });
+      _objectBoxService.insertDialogueRecord(
+          RecordEntity(role: 'user', content: 'Help me Buddie'));
+      firstScrollToBottom();
+
+      chatManager.addChatSession('user', 'Help me Buddie');
+      await _getBotResponse(text, isHelp: true);
+    }
+  }
+
+  Future<void> _getBotResponse(String userInput, {bool isHelp = false}) async {
     try {
       tryNotifyListeners();
 
       String? responseId;
 
-      chatManager.createStreamingRequest(text: userInput).listen((jsonString) async {
+      final chatResponse = isHelp ? chatHelp : chatManager;
+
+      chatResponse.createStreamingRequest(text: userInput).listen(
+            (jsonString) async {
           try {
             final jsonObj = jsonDecode(jsonString);
+            bool isInBottom = checkInBottom();
 
             if (responseId == null) {
               responseId = const Uuid().v4();
-              messages.insert(0,{'id': responseId, 'text': '', 'isUser': 'assistant'});
+              if (isHelp) {
+                newMessages.insert(
+                    0, {'id': responseId, 'text': helpMessage, 'isUser': 'assistant'});
+              } else{
+                newMessages.insert(
+                    0, {'id': responseId, 'text': '', 'isUser': 'assistant'});
+              }
             }
 
             if (jsonObj.containsKey('delta')) {
               final delta = jsonObj['delta'];
-              updateMessageText(responseId!, delta);
+              updateMessageText(responseId!, delta, isHelp: isHelp);
             }else if (jsonObj.containsKey['tool']){
               final tool = jsonObj['tool'];
               final args = jsonObj['args'] ?? {};
@@ -321,45 +327,74 @@ class ChatController extends ChangeNotifier{
 
             if (jsonObj['isFinished'] == true) {
               final completeResponse = jsonObj['content'];
-              updateMessageText(responseId!, completeResponse, isFinal: true);
+              updateMessageText(responseId!, completeResponse,
+                  isFinal: true, isHelp: isHelp);
               responseId = null;
 
-              _objectBoxService.insertDialogueRecord(RecordEntity(role: 'assistant', content: completeResponse));
+              _objectBoxService.insertDialogueRecord(RecordEntity(
+                  role: 'assistant', content: completeResponse));
               chatManager.addChatSession('assistant', completeResponse);
+            }
+            if (isInBottom) {
+              firstScrollToBottom();
             }
           } catch (e) {
             updateMessageText(responseId!, 'Error parsing response');
           }
         },
         onDone: () {},
-        onError: (error) {
+        onError: (error) async {
+          String errorInfo = error.toString();
+          errorInfo = 'Your usage quota has been exhausted.';
+          bool isInBottom = checkInBottom();
           if (responseId != null) {
-            updateMessageText(responseId!, 'Error: ${error.toString()}');
+            updateMessageText(responseId!, 'Error: $errorInfo');
           } else {
-            messages.insert(0, {'id': const Uuid().v4(), 'text': 'Error: ${error.toString()}', 'isUser': 'assistant'});
+            newMessages.insert(0, {
+              'id': const Uuid().v4(),
+              'text': 'Error: $errorInfo',
+              'isUser': 'assistant'
+            });
           }
           tryNotifyListeners();
+          if (isInBottom) {
+            firstScrollToBottom();
+          }
         },
       );
     } catch (e) {
-      messages.insert(0,{
+      newMessages.insert(0, {
         'id': Uuid().v4(),
         'text': 'Error: ${e.toString()}',
         'isUser': 'assistant'
       });
+
       tryNotifyListeners();
     }
   }
 
-  void updateMessageText(String messageId, String text, {bool isFinal = false}) {
-    int index = messages.indexWhere((msg) => msg['id'] == messageId);
+  void updateMessageText(String messageId, String text,
+      {bool isFinal = false, bool isHelp = false}) {
+    int index = newMessages.indexWhere((msg) => msg['id'] == messageId);
     if (index != -1) {
       if (!isFinal) {
-        messages[index]['text'] += text;
+        newMessages[index]['text'] += text;
       } else {
-        messages[index]['text'] = text;
+        newMessages[index]['text'] = isHelp ? helpMessage + text : text;
       }
       tryNotifyListeners();
+    }
+  }
+
+  void insertNewMessage(Map<String, dynamic> data) {
+    bool isInBottom = checkInBottom();
+    if(!isInBottom){
+      unReadMessageId.value.add(data['id']);
+    }
+    newMessages.insert(0, data);
+    tryNotifyListeners();
+    if (isInBottom) {
+      firstScrollToBottom();
     }
   }
 
@@ -379,33 +414,39 @@ class ChatController extends ChangeNotifier{
     scrollController.dispose();
   }
 
-  void _scrollToBottom() {
-      WidgetsBinding.instance.addPostFrameCallback((_){
-        if(scrollController.hasClients){
-          scrollController.animateTo(
-            0,
-            duration: Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-        }else{
-          dev.log(
-            'No clients are attached to the ScrollController.',
-            name: 'ScrollToBottomError',
-            level: 500,
-          );
-        }
-      });
+  bool isInAnimation = false;
+
+  bool checkInBottom() {
+    if (!scrollController.hasClients) return true;
+    double maxScroll = scrollController.position.maxScrollExtent;
+    double currentScroll = scrollController.offset;
+    return currentScroll >= maxScroll - 20;
   }
 
-  bool checkAndNavigateToWelcomeRecordScreen() {
-    final speakers = _objectBoxService.getUserSpeaker();
-    int? userUtteranceCount = speakers?.length;
-
-    if (userUtteranceCount! < 3) {
-      _objectBoxService.deleteAllSpeakers();
-      FlutterForegroundTask.sendDataToTask(voice_constants.voiceprintStart);
-      return true;
-    }
-    return false;
+  firstScrollToBottom({bool isAnimated = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!scrollController.hasClients) return;
+      if (isInAnimation) return;
+      isInAnimation = true;
+      double maxScroll = scrollController.position.maxScrollExtent;
+      double currentScroll = scrollController.offset;
+      while (currentScroll < maxScroll) {
+        if (isAnimated) {
+          // Perform the animated scroll only on the first call
+          await scrollController.animateTo(
+            maxScroll,
+            duration: const Duration(milliseconds: 100),
+            curve: Curves.linear,
+          );
+          await Future.delayed(const Duration(milliseconds: 10));
+        } else {
+          // Perform an immediate jump to the bottom on subsequent recursive calls
+          scrollController.jumpTo(maxScroll);
+        }
+        maxScroll = scrollController.position.maxScrollExtent;
+        currentScroll = scrollController.offset;
+      }
+      isInAnimation = false;
+    });
   }
 }

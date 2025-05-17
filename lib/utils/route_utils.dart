@@ -12,7 +12,6 @@ import 'package:app/views/entry/welcome_screen.dart';
 import 'package:go_router/go_router.dart';
 import '../views/entry/loading_screen.dart';
 import '../views/journal/daily_search_list_view.dart';
-import '../views/user_model_screen.dart';
 import '../views/voiceprint_screen.dart';
 import 'package:flutter/material.dart';
 
@@ -87,12 +86,7 @@ class RouteUtils {
       path: RouteName.loading,
       name: RouteName.loading,
       builder: (_, state) => const LoadingScreen()
-    ),
-    GoRoute(
-      path: RouteName.user_model,
-      name: RouteName.user_model,
-      builder: (_, state) => const UserModelScreen(),
-    ),
+    )
   ];
 }
 
@@ -115,5 +109,4 @@ class RouteName {
   static const String daily_list = '/daily_list';
   static const String meeting_detail = '/meeting_detail';
   static const String todo_list = '/todo_list';
-  static const String user_model = '/user_model';
 }

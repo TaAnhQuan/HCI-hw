@@ -1,26 +1,28 @@
 import 'dart:developer' as dev;
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:app/constants/wakeword_constants.dart';
-import 'package:app/services/cloud_asr.dart';
-import 'package:app/services/cloud_tts.dart';
-import 'package:app/services/latency_logger.dart';
+import 'package:app/services/tts_service_isolate.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:record/record.dart';
+import 'package:sherpa_onnx/sherpa_onnx.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:uuid/uuid.dart';
+import '../constants/prompt_constants.dart';
 import '../constants/record_constants.dart';
 import '../models/record_entity.dart';
 import '../services/objectbox_service.dart';
 import '../services/chat_manager.dart';
 
 import '../utils/asr_utils.dart';
-import 'package:my_record_service/my_record_service.dart';
+import '../utils/text_process_utils.dart';
+import 'asr_service_isolate.dart';
+
+final Float32List silence = Float32List((16000 * 5).toInt());
 
 @pragma('vm:entry-point')
 void startRecordService() {
@@ -28,51 +30,43 @@ void startRecordService() {
 }
 
 class RecordServiceHandler extends TaskHandler {
-  late AsrManager _asrManager;
   AudioRecorder _record = AudioRecorder();
   sherpa_onnx.VoiceActivityDetector? _vad;
-  sherpa_onnx.OfflineRecognizer? _nonstreamRecognizer;
+  late KeywordSpotter _keywordSpotter;
+  late OnlineStream _keywordSpotterStream;
   StreamSubscription<RecordState>? _recordSub;
   final ObjectBoxService _objectBoxService = ObjectBoxService();
 
   bool _inDialogMode = false;
-  bool _isUsingCloudServices = true;
-
   bool _isInitialized = false;
-
   RecordState _recordState = RecordState.stop;
   bool _isMeeting = false;
   bool _onRecording = true;
 
-  late FlutterTts _flutterTts;
-  final CloudTts _cloudTts = CloudTts();
-  final CloudAsr _cloudAsr = CloudAsr();
-
   final ChatManager _chatManager = ChatManager();
   final String _selectedModel = 'qwen-max';
+  bool _kwsBuddie = false;
+  bool _kwsJustListen = false;
   List<double> samplesFloat32Buffer = [];
   StreamSubscription? _currentSubscription;
   Stream<Uint8List>? _recordStream;
   bool _onMicrophone = false;
+  AsrServiceIsolate _asrServiceIsolate = AsrServiceIsolate();
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     await ObjectBoxService.initialize();
 
-    await _chatManager.init(selectedModel: _selectedModel);
+    await _chatManager.init(
+        selectedModel: _selectedModel,
+        systemPrompt:
+        '$systemPromptOfChat\n\n${systemPromptOfScenario['voice']}');
 
     final isAlwaysOn = (await FlutterForegroundTask.getData(key: 'isRecording')) ?? true;
     if (isAlwaysOn) {
-      _asrManager = AsrManager();
       await _startRecord();
     }
-
-    _initTts();
-
-    await _cloudAsr.init();
-    await _cloudTts.init();
-
-    _isUsingCloudServices = _cloudAsr.isAvailable && _cloudTts.isAvailable;
+    IsolateTts.init();
   }
 
   @override
@@ -92,6 +86,12 @@ class RecordServiceHandler extends TaskHandler {
       await _stopMicrophone();
     } else if (data == Constants.actionStartMicrophone) {
       await _startMicrophone();
+    } else if (data == "InitTTS") {
+      try {
+        IsolateTts.init();
+      } catch (e, stack) {
+        print("TTS has Init $e");
+      }
     }
     FlutterForegroundTask.sendDataToMain(Constants.actionDone);
   }
@@ -111,21 +111,15 @@ class RecordServiceHandler extends TaskHandler {
     }
   }
 
-  Future<void> _initTts() async {
-    _flutterTts = FlutterTts();
-    await _flutterTts.awaitSpeakCompletion(true);
-    if (Platform.isAndroid) {
-      await _flutterTts.setQueueMode(1);
-    }
-  }
-
   Future<void> _initAsr() async {
     if (!_isInitialized) {
       sherpa_onnx.initBindings();
 
-      _vad = await _asrManager.initVad();
+      _vad = await initVad();
+      _keywordSpotter = await initKeywordSpotter();
+      _keywordSpotterStream = _keywordSpotter.createStream();
 
-      _nonstreamRecognizer = await _asrManager.createNonstreamingRecognizer();
+      await _asrServiceIsolate.init();
 
       _recordSub = _record.onStateChanged().listen((recordState) {
         _recordState = recordState;
@@ -137,7 +131,6 @@ class RecordServiceHandler extends TaskHandler {
 
   Future<void> _startRecord() async {
     await _initAsr();
-
     _startMicrophone();
 
     FlutterForegroundTask.saveData(key: 'isRecording', value: true);
@@ -166,23 +159,32 @@ class RecordServiceHandler extends TaskHandler {
   }
 
   void _processAudioData(data, {String category = RecordEntity.categoryDefault}) async {
-    if (_vad == null || _nonstreamRecognizer == null) {
+    if (_vad == null || !_asrServiceIsolate.isInitialized) {
       return;
     }
 
     final samplesFloat32 = convertBytesToFloat32(Uint8List.fromList(data));
 
     _vad!.acceptWaveform(samplesFloat32);
+    _keywordSpotterStream.acceptWaveform(samples: samplesFloat32, sampleRate: 16000);
+    while (_keywordSpotter.isReady(_keywordSpotterStream)) {
+      _keywordSpotter.decode(_keywordSpotterStream);
+      final text = _keywordSpotter.getResult(_keywordSpotterStream).keyword;
+      if (text.isNotEmpty) {
+        if (wakeword_constants.wakeWordStartDialog
+            .any((keyword) => text.toLowerCase().contains(keyword))) {
+          _kwsBuddie = true;
+        } else if (wakeword_constants.wakeWordEndDialog
+            .any((keyword) => text.toLowerCase().contains(keyword))) {
+          _kwsJustListen = true;
+        } else {
+        }
+      }
+    }
 
     if (_vad!.isDetected() && _inDialogMode) {
-      if (_isUsingCloudServices) {
-        if (_cloudTts.isPlaying) {
-          _cloudTts.stop();
-          AudioPlayer().play(AssetSource('audios/interruption.wav'));
-        }
-      } else {
-        _flutterTts.stop();
-      }
+      _currentSubscription?.cancel();
+      IsolateTts.interrupt();
     }
 
     if (_vad!.isDetected()) {
@@ -198,17 +200,10 @@ class RecordServiceHandler extends TaskHandler {
         break;
       }
       _vad!.pop();
+      Float32List paddedSamples = await _addSilencePadding(samples);
 
       var segment = '';
-      if ((_inDialogMode || _isMeeting) && _isUsingCloudServices) {
-        segment = await _cloudAsr.recognize(samples);
-      } else {
-        final nonstreamStream = _nonstreamRecognizer!.createStream();
-        nonstreamStream.acceptWaveform(samples: samples, sampleRate: 16000);
-        _nonstreamRecognizer!.decode(nonstreamStream);
-        segment = _nonstreamRecognizer!.getResult(nonstreamStream).text;
-        nonstreamStream.free();
-      }
+      segment = await _asrServiceIsolate.sendData(paddedSamples);
       segment = segment
           .replaceFirst('Buddy', 'Buddie')
           .replaceFirst('buddy', 'buddie');
@@ -225,16 +220,12 @@ class RecordServiceHandler extends TaskHandler {
       {String category = RecordEntity.categoryDefault, String? operationId}) {
     if (text.isEmpty) return;
 
-    if (!_inDialogMode &&
-        speaker == 'user' &&
-        wakeword_constants.wakeWordStartDialog
-            .any((keyword) => text.toLowerCase().contains(keyword))) {
-      _inDialogMode = true;
-    }
+    text = text.trim();
+    text = TextProcessUtils.removeBracketsContent(text);
+    text = TextProcessUtils.clearIfRepeatedMoreThanFiveTimes(text);
+    text = text.trim();
 
-    String trimmedText = text.trim();
-    if ((trimmedText.startsWith('(') && trimmedText.endsWith(')')) ||
-        (trimmedText.startsWith('[') && trimmedText.endsWith(']'))) {
+    if (text.isEmpty) {
       return;
     }
 
@@ -243,22 +234,30 @@ class RecordServiceHandler extends TaskHandler {
       'isEndpoint': true,
       'inDialogMode': _inDialogMode,
       'isMeeting': _isMeeting,
-      'speaker': 'user',
+      'speaker': speaker,
     });
+
+    if (!_inDialogMode &&
+        speaker == 'user' &&
+        (wakeword_constants.wakeWordStartDialog
+            .any((keyword) => text.toLowerCase().contains(keyword)) || _kwsBuddie)) {
+      _kwsBuddie = false;
+      _kwsJustListen = false;
+      _inDialogMode = true;
+      AudioPlayer().play(AssetSource('audios/interruption.wav'));
+    }
 
     if (_inDialogMode) {
       _objectBoxService
           .insertDialogueRecord(RecordEntity(role: 'user', content: text));
       _chatManager.addChatSession('user', text);
       if (wakeword_constants.wakeWordEndDialog
-          .any((keyword) => text.toLowerCase().contains(keyword))) {
+          .any((keyword) => text.toLowerCase().contains(keyword)) || _kwsJustListen) {
         _inDialogMode = false;
+        _kwsJustListen = false;
+        _kwsBuddie = false;
         _vad!.clear();
-        if (_isUsingCloudServices) {
-          _cloudTts.stop();
-        } else {
-          _flutterTts.stop();
-        }
+        IsolateTts.interrupt();
         AudioPlayer().play(AssetSource('audios/beep.wav'));
       }
     } else {
@@ -267,31 +266,25 @@ class RecordServiceHandler extends TaskHandler {
       _chatManager.addChatSession('user', text);
     }
 
+
     if (_inDialogMode) {
       _currentSubscription?.cancel();
+      String ttsOperationId = Uuid().v4();
       _currentSubscription =
           _chatManager.createStreamingRequest(text: text).listen((response) {
             final res = jsonDecode(response);
             final content = res['content'] ?? res['delta'];
             final isFinished = res['isFinished'];
 
-            if (operationId != null) {
-              LatencyLogger.recordEnd(operationId, phase: 'llm');
-            }
 
             FlutterForegroundTask.sendDataToMain({
               'currentText': text,
               'isFinished': false,
               'content': res['delta'],
             });
-            if (!_isUsingCloudServices) {
-              _flutterTts.speak(res['delta']);
-            }
+            IsolateTts.speak(text: res['delta'], operationId: ttsOperationId);
 
             if (isFinished) {
-              if (_isUsingCloudServices) {
-                _cloudTts.speak(content, operationId: operationId);
-              }
               _objectBoxService.insertDialogueRecord(
                   RecordEntity(role: 'assistant', content: content));
               _chatManager.addChatSession('assistant', content);
@@ -312,8 +305,6 @@ class RecordServiceHandler extends TaskHandler {
 
     _vad?.free();
 
-    _nonstreamRecognizer?.free();
-
     _isInitialized = false;
 
     FlutterForegroundTask.saveData(key: 'isRecording', value: false);
@@ -329,5 +320,51 @@ class RecordServiceHandler extends TaskHandler {
       _recordStream = null;
       _onMicrophone = false;
     }
+  }
+
+  Future<sherpa_onnx.VoiceActivityDetector> initVad() async =>
+      sherpa_onnx.VoiceActivityDetector(
+        config: sherpa_onnx.VadModelConfig(
+          sileroVad: sherpa_onnx.SileroVadModelConfig(
+            model: await copyAssetFile('assets/silero_vad.onnx'),
+            minSilenceDuration: 0.6,
+            minSpeechDuration: 0.25,
+            maxSpeechDuration: 12.0,
+          ),
+          numThreads: 1,
+          debug: true,
+        ),
+        bufferSizeInSeconds: 12.0,
+      );
+
+  Future<KeywordSpotter> initKeywordSpotter() async {
+    const kwsDir = 'assets/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01';
+    const encoder = 'encoder-epoch-12-avg-2-chunk-16-left-64.onnx';
+    const decoder = 'decoder-epoch-12-avg-2-chunk-16-left-64.onnx';
+    const joiner = 'joiner-epoch-12-avg-2-chunk-16-left-64.onnx';
+    KeywordSpotter kws =  KeywordSpotter(
+        KeywordSpotterConfig(
+          model: OnlineModelConfig(
+              transducer: OnlineTransducerModelConfig(
+                encoder: await copyAssetFile('$kwsDir/$encoder'),
+                decoder: await copyAssetFile('$kwsDir/$decoder'),
+                joiner: await copyAssetFile('$kwsDir/$joiner'),
+              ),
+              tokens: await copyAssetFile('$kwsDir/tokens_kws.txt')
+          ),
+          keywordsFile: await copyAssetFile('$kwsDir/keywords.txt'),
+        )
+    );
+    return kws;
+  }
+
+  Future<Float32List> _addSilencePadding(Float32List samples) async {
+    int totalLength = silence.length * 2 + samples.length;
+
+    Float32List paddedSamples = Float32List(totalLength);
+
+    paddedSamples.setAll(silence.length, samples);
+
+    return paddedSamples;
   }
 }

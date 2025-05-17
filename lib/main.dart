@@ -1,6 +1,7 @@
 import 'package:app/controllers/auth_controller.dart';
 import 'package:app/controllers/style_controller.dart';
 import 'package:app/services/objectbox_service.dart';
+import 'package:app/services/tts_service_isolate.dart';
 import 'package:app/utils/route_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -13,13 +14,11 @@ import 'package:provider/provider.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'controllers/user_model_controller.dart';
 import 'firebase_options.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
 Future<void> main() async {
-  // Initialize port for communication between TaskHandler and UI.
   WidgetsFlutterBinding.ensureInitialized();
 
   const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -42,6 +41,7 @@ Future<void> main() async {
   FlutterForegroundTask.initCommunicationPort();
 
   await ObjectBoxService.initialize();
+  await copyTTSAssetFiles();
 
   FlutterBluePlus.setLogLevel(LogLevel.error);
   FlutterBluePlus.setOptions(restoreState: true);
@@ -53,11 +53,6 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  final authController = Get.put(MyAuthController());
-  await authController.signInAnonymously();
-  final token = await authController.fetchLlmToken();
-  FlutterForegroundTask.saveData(key: 'llmToken', value: token);
-
   await SentryFlutter.init(
     (options) {
       options.dsn = 'https://476fe26ce43858184b0f5309106671d6@o4507015727874048.ingest.us.sentry.io/4508811095375872';
@@ -67,11 +62,8 @@ Future<void> main() async {
     },
     appRunner: () => runApp(
       SentryWidget(
-        child: MultiProvider(
-          providers: [
-            ChangeNotifierProvider(create: (_) => ThemeNotifier()),
-            ChangeNotifierProvider(create: (_) => UserModelController()),
-          ],
+        child: ChangeNotifierProvider(
+          create: (_) => ThemeNotifier(),
           child: MyApp(isFirstLaunch: isFirstLaunch),
         ),
       ),

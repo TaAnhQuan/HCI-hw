@@ -35,6 +35,7 @@ class _AudioPlayerState extends State<AudioPlayer> {
   int _maxDuration = 0;
   int _currentDuration = 0;
   PlayerState? _playerState;
+  bool _exists = false;
 
   @override
   void dispose() {
@@ -52,25 +53,36 @@ class _AudioPlayerState extends State<AudioPlayer> {
 
   void _init() async {
     await _prepare();
-    _getMaxDuration();
     _addListen();
   }
 
   Future<void> _prepare() async {
+    late File file;
     if (widget.filePath != null) {
-      _playerController.preparePlayer(path: widget.filePath!);
+      file = File(widget.filePath!);
     } else {
       String fileName = widget.assetsPath!.split('/').last;
       final audioFile = await rootBundle.load(widget.assetsPath!);
-      String dir = await PathProviderService.getTemporaryPath();
-      File file = File('$dir/$fileName');
+      String dir = await PathProviderUtil.getTemporaryPath();
+      file = File('$dir/$fileName');
       await file.writeAsBytes(audioFile.buffer.asUint8List());
-      _playerController.preparePlayer(path: file.path);
     }
-    _playerController.setFinishMode(finishMode: FinishMode.pause);
+
+    bool exists = await file.exists();
+    setState(() {
+      _exists = exists;
+    });
+    if (exists) {
+      await _playerController.preparePlayer(path: widget.filePath!);
+      _playerController.setFinishMode(finishMode: FinishMode.pause);
+
+      await _getMaxDuration();
+    } else {
+      debugPrint('${file.path} does not exist');
+    }
   }
 
-  void _getMaxDuration() async {
+  Future<void> _getMaxDuration() async {
     final fileLengthInDuration = await _playerController.getDuration(DurationType.max);
     setState(() {
       _maxDuration = fileLengthInDuration;
@@ -99,18 +111,18 @@ class _AudioPlayerState extends State<AudioPlayer> {
   }
 
   void _onClickReplay() {
-    _seekTo(_currentDuration - 15);
+    _seekTo(_currentDuration - 15 * 1000);
   }
 
   void _onClickForward() {
-    _seekTo(_currentDuration + 15);
+    _seekTo(_currentDuration + 15 * 1000);
   }
 
   void _seekTo(int progress) {
     int calProgress = 0;
     if (progress < 0) {
       calProgress = 0;
-    } else if (calProgress > _maxDuration) {
+    } else if (progress > _maxDuration) {
       calProgress = _maxDuration;
     } else {
       calProgress = progress;
@@ -120,7 +132,8 @@ class _AudioPlayerState extends State<AudioPlayer> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
+    return _exists
+        ? LayoutBuilder(builder: (context, constraints) {
       final themeNotifier = Provider.of<ThemeNotifier>(context);
       bool isLightMode = themeNotifier.mode == Mode.light;
       Duration currentDuration = Duration(
@@ -149,6 +162,7 @@ class _AudioPlayerState extends State<AudioPlayer> {
               seekLineThickness: 1,
               waveThickness: 1,
               spacing: 3,
+              scaleFactor: 800
             ),
           ),
           DefaultTextStyle(
@@ -169,6 +183,8 @@ class _AudioPlayerState extends State<AudioPlayer> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               InkWell(
+                splashColor: Colors.transparent,
+                highlightColor: Colors.transparent,
                 onTap: _onClickReplay,
                 child: BudIcon(
                   icon: AssetsUtil.icon_reply_15,
@@ -177,16 +193,20 @@ class _AudioPlayerState extends State<AudioPlayer> {
               ),
               SizedBox(width: 24.sp),
               InkWell(
+                splashColor: Colors.transparent,
+                highlightColor: Colors.transparent,
                 onTap: _onClickPlay,
                 child: (_playerState == PlayerState.playing)
                     ? Icon(Icons.pause_circle)
                     : BudIcon(
-                        icon: AssetsUtil.icon_audio_play,
-                        size: 24.sp,
-                      ),
+                  icon: AssetsUtil.icon_audio_play,
+                  size: 24.sp,
+                ),
               ),
               SizedBox(width: 24.sp),
               InkWell(
+                splashColor: Colors.transparent,
+                highlightColor: Colors.transparent,
                 onTap: _onClickForward,
                 child: BudIcon(
                   icon: AssetsUtil.icon_forward_15,
@@ -197,6 +217,7 @@ class _AudioPlayerState extends State<AudioPlayer> {
           )
         ],
       );
-    });
+    })
+        : const Text('File does not exist');
   }
 }

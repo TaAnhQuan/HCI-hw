@@ -1,15 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-
-import 'package:app/constants/prompt_constants.dart';
-import 'package:app/services/embeddings_service.dart';
 import 'package:intl/intl.dart';
-import 'package:mcp_dart/mcp_dart.dart';
-
 import '../models/chat_session.dart';
 import '../models/record_entity.dart';
-import '../models/summary_entity.dart';
 import '../services/llm.dart';
 import '../services/objectbox_service.dart';
 
@@ -18,15 +11,14 @@ class ChatManager {
   final ChatSession chatSession = ChatSession();
 
   late LLM _llm;
-  late LLM _llm4SecondRound;
-  late final Client _client;
+  // late LLM _llm4SecondRound;
 
   // Receive ChatSession from external sources
   ChatManager();
 
   Future<void> init({required String selectedModel, String? systemPrompt}) async {
     _llm = await LLM.create(selectedModel, systemPrompt: systemPrompt);
-    _llm4SecondRound = await LLM.create(selectedModel, systemPrompt: systemPromptOfChat2);
+    // _llm4SecondRound = await LLM.create(selectedModel, systemPrompt: systemPromptOfChat2);
 
     List<RecordEntity>? recentRecords = ObjectBoxService().getTermRecords();
     recentRecords?.forEach((RecordEntity recordEntity) {
@@ -36,7 +28,7 @@ class ChatManager {
   }
 
   Stream<String> createStreamingRequest({required String text}) async* {
-    RegExp pattern = RegExp(r'[，。！？；：,.!?;:](?=\s)');
+    RegExp pattern = RegExp(r'[。！？；：.!?;:](?=\s)');
 
     var lastIndex = 0;
     var content = "";
@@ -87,78 +79,78 @@ class ChatManager {
     }
 
     // Second round of processing
-    if (jsonObj.containsKey('time') && jsonObj.containsKey('keywords')) {
-      try {
-        lastIndex = 0;
-        int? queryTimeStamp;
-        List<String> keywords = List<String>.from(jsonObj['keywords'].map((item) => item.toString()));
-        List<SummaryEntity>? similarSummaries;
-        try {
-          if (RegExp(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$').hasMatch(jsonObj['time'])) {
-            queryTimeStamp = DateFormat('yyyy-MM-dd HH:mm').parse(jsonObj['time']).millisecondsSinceEpoch;
-            similarSummaries = await ObjectBoxService().getSimilarSummariesWithConstraints(keywords, 0.7, time: queryTimeStamp, level: 'mm');
-          } else if (RegExp(r'^\d{4}-\d{2}-\d{2} \d{2}$').hasMatch(jsonObj['time'])) {
-            queryTimeStamp = DateFormat('yyyy-MM-dd HH').parse(jsonObj['time']).millisecondsSinceEpoch;
-            similarSummaries = await ObjectBoxService().getSimilarSummariesWithConstraints(keywords, 0.7, time: queryTimeStamp, level: 'HH');
-          } else if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(jsonObj['time'])) {
-            queryTimeStamp = DateFormat('yyyy-MM-dd').parse(jsonObj['time']).millisecondsSinceEpoch;
-            similarSummaries = await ObjectBoxService().getSimilarSummariesWithConstraints(keywords, 0.7, time: queryTimeStamp, level: 'dd');
-          }
-        } catch (e) {
-          print('Error during parse date time: $e');
-        }
-
-        String history = "";
-        if (similarSummaries != null && similarSummaries.isNotEmpty) {
-          history = loadChatHistory(similarSummaries.last.startTime, similarSummaries.last.endTime);
-        }
-
-        final extraMessage = "Relative information: ${(similarSummaries != null && similarSummaries.isNotEmpty) ? similarSummaries.map((item) => item.content).toList() : ''}\nRelative chat history: $history";
-        var messages2 = messages;
-        messages2.removeAt(0);
-        messages2.last["content"] = "${messages2.last["content"]!}\n$extraMessage";
-        final responseStream = _llm4SecondRound.createStreamingRequest(messages: messages2);
-        await for (var chunk in responseStream) {
-          final jsonString = completeJsonIfIncomplete(chunk);
-          try {
-            jsonObj = jsonDecode(jsonString);
-
-            if (jsonObj.containsKey('content')) {
-              content = jsonObj['content'];
-
-              Iterable<RegExpMatch> matches = pattern.allMatches(content);
-              if (matches.isNotEmpty && matches.last.start + 1 > lastIndex) {
-                final match = matches.last;
-                final matchedText = match.group(0);
-
-                final delta = content.substring(lastIndex, matches.last.start + 1);
-                lastIndex = matches.last.start + 1;
-                yield jsonEncode({
-                  "content": content,
-                  "delta": delta,
-                  "isFinished": false,
-                  "isEnd": jsonObj['isEnd'] ?? false,
-                });
-              }
-            }
-          } catch (e) {
-            print("JSON string is incomplete, continue accumulating: $jsonString");
-          }
-        }
-      } catch (e) {
-        print("Failed to parse query start and end time: $e");
-      }
-
-      if (lastIndex < content.length) {
-        final remainingText = content.substring(lastIndex);
-        yield jsonEncode({
-          "content": content,
-          "delta": remainingText,
-          "isFinished": true,
-          "isEnd": jsonObj['isEnd'] ?? false,
-        });
-      }
-    }
+    // if (jsonObj.containsKey('time') && jsonObj.containsKey('keywords')) {
+    //   try {
+    //     lastIndex = 0;
+    //     int? queryTimeStamp;
+    //     List<String> keywords = List<String>.from(jsonObj['keywords'].map((item) => item.toString()));
+    //     List<SummaryEntity>? similarSummaries;
+    //     try {
+    //       if (RegExp(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$').hasMatch(jsonObj['time'])) {
+    //         queryTimeStamp = DateFormat('yyyy-MM-dd HH:mm').parse(jsonObj['time']).millisecondsSinceEpoch;
+    //         similarSummaries = await ObjectBoxService().getSimilarSummariesWithConstraints(keywords, 0.7, time: queryTimeStamp, level: 'mm');
+    //       } else if (RegExp(r'^\d{4}-\d{2}-\d{2} \d{2}$').hasMatch(jsonObj['time'])) {
+    //         queryTimeStamp = DateFormat('yyyy-MM-dd HH').parse(jsonObj['time']).millisecondsSinceEpoch;
+    //         similarSummaries = await ObjectBoxService().getSimilarSummariesWithConstraints(keywords, 0.7, time: queryTimeStamp, level: 'HH');
+    //       } else if (RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(jsonObj['time'])) {
+    //         queryTimeStamp = DateFormat('yyyy-MM-dd').parse(jsonObj['time']).millisecondsSinceEpoch;
+    //         similarSummaries = await ObjectBoxService().getSimilarSummariesWithConstraints(keywords, 0.7, time: queryTimeStamp, level: 'dd');
+    //       }
+    //     } catch (e) {
+    //       print('Error during parse date time: $e');
+    //     }
+    //
+    //     String history = "";
+    //     if (similarSummaries != null && similarSummaries.isNotEmpty) {
+    //       history = loadChatHistory(similarSummaries.last.startTime, similarSummaries.last.endTime);
+    //     }
+    //
+    //     final extraMessage = "Relative information: ${(similarSummaries != null && similarSummaries.isNotEmpty) ? similarSummaries.map((item) => item.content).toList() : ''}\nRelative chat history: $history";
+    //     var messages2 = messages;
+    //     messages2.removeAt(0);
+    //     messages2.last["content"] = "${messages2.last["content"]!}\n$extraMessage";
+    //     final responseStream = _llm4SecondRound.createStreamingRequest(messages: messages2);
+    //     await for (var chunk in responseStream) {
+    //       final jsonString = completeJsonIfIncomplete(chunk);
+    //       try {
+    //         jsonObj = jsonDecode(jsonString);
+    //
+    //         if (jsonObj.containsKey('content')) {
+    //           content = jsonObj['content'];
+    //
+    //           Iterable<RegExpMatch> matches = pattern.allMatches(content);
+    //           if (matches.isNotEmpty && matches.last.start + 1 > lastIndex) {
+    //             final match = matches.last;
+    //             final matchedText = match.group(0);
+    //
+    //             final delta = content.substring(lastIndex, matches.last.start + 1);
+    //             lastIndex = matches.last.start + 1;
+    //             yield jsonEncode({
+    //               "content": content,
+    //               "delta": delta,
+    //               "isFinished": false,
+    //               "isEnd": jsonObj['isEnd'] ?? false,
+    //             });
+    //           }
+    //         }
+    //       } catch (e) {
+    //         print("JSON string is incomplete, continue accumulating: $jsonString");
+    //       }
+    //     }
+    //   } catch (e) {
+    //     print("Failed to parse query start and end time: $e");
+    //   }
+    //
+    //   if (lastIndex < content.length) {
+    //     final remainingText = content.substring(lastIndex);
+    //     yield jsonEncode({
+    //       "content": content,
+    //       "delta": remainingText,
+    //       "isFinished": true,
+    //       "isEnd": jsonObj['isEnd'] ?? false,
+    //     });
+    //   }
+    // }
 
     messages.add({"role": "assistant", "content": content});
     content = '';
@@ -174,7 +166,6 @@ class ChatManager {
     DateTime now = DateTime.now();
     var input = """
 Timestamp: ${now.toIso8601String().split('.').first}\n
-Chat Session: \n$session
 ---\n
 User Input: $userInput""";
     return input;

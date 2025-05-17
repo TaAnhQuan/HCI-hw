@@ -31,6 +31,8 @@ class HomeAppBar extends StatelessWidget {
     return Row(
       children: [
         InkWell(
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
           onTap: onTapLogo,
           child: BudIcon(
             icon: AssetsUtil.icon_chat_logo,
@@ -49,6 +51,8 @@ class HomeAppBar extends StatelessWidget {
           ),
         ),
         InkWell(
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
           onTap: onTapBluetooth,
           child: BudIcon(
             icon: bluetoothConnected == BluetoothConnectionState.connected ? AssetsUtil.icon_bluetooth_connected : AssetsUtil.icon_bluetooth_disconnected,
@@ -57,6 +61,8 @@ class HomeAppBar extends StatelessWidget {
         ),
         SizedBox(width: 12.sp),
         InkWell(
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
           onTap: () => _onClickSetting(context),
           child: BudIcon(
             icon: AssetsUtil.icon_btn_setting,

@@ -41,6 +41,8 @@ class ChatTextField extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 13),
             child: InkWell(
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
               onTap: onTapKeyboard,
               child: const BudIcon(
                 icon: AssetsUtil.icon_keyboard,
@@ -75,6 +77,8 @@ class ChatTextField extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: InkWell(
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
               onTap: onTapSend,
               child: const BudIcon(
                 icon: AssetsUtil.icon_send_message,
