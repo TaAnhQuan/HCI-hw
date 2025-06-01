@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
-class ButtonModel extends ChangeNotifier {
+class ToolButtonModel extends ChangeNotifier {
   bool _isOn = false;
-
   bool get isOn => _isOn;
 
   void toggle() {

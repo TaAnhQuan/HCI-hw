@@ -246,7 +246,7 @@ class _HomeChatScreenState extends State<HomeChatScreen>
   }
 
   void _onClickTool(){
-
+    _chatController.onTapTool();
   }
 
   void _onClickHelp() {

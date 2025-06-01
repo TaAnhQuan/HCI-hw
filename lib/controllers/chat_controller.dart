@@ -2,14 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:app/constants/prompt_constants.dart';
-import 'package:app/extension/map_extension.dart';
 import 'package:flutter/material.dart';
-import 'dart:developer' as dev;
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants/city_around_the_globe.dart';
-import '../constants/voice_constants.dart';
 import '../models/record_entity.dart';
 import '../models/tool_button.dart';
 import '../services/chat_manager.dart';
@@ -31,7 +28,7 @@ class ChatController extends ChangeNotifier {
   late final WebSocketChannel _mcpChannel;
   final Map<int, Completer<String>> _pendingRequests = {};
   late final StreamSubscription _mcpSubscription;
-  final ButtonModel _buttonModel = ButtonModel();
+  final ToolButtonModel _toolButtonModel = ToolButtonModel();
 
   final ValueNotifier<Set<String>> unReadMessageId = ValueNotifier({});
 
@@ -322,15 +319,15 @@ class ChatController extends ChangeNotifier {
   }
 
   Future<void> onTapTool() async{
-
+    onButtonTap();
   }
 
   void onButtonTap() {
-    _buttonModel.toggle();
+    _toolButtonModel.toggle();
   }
 
   void setValue(bool newValue) {
-    _buttonModel.setValue(newValue);
+    _toolButtonModel.setValue(newValue);
   }
 
   bool _containsToolCommand(String input) {
