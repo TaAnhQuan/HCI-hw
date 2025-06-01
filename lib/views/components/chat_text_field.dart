@@ -12,6 +12,7 @@ class ChatTextField extends StatelessWidget {
   final ValueChanged<String>? onSubmitted;
   final GestureTapCallback? onTapKeyboard;
   final GestureTapCallback? onTapSend;
+  final GestureTapCallback? onTapTool;
 
   const ChatTextField({
     super.key,
@@ -20,6 +21,7 @@ class ChatTextField extends StatelessWidget {
     this.onSubmitted,
     this.onTapKeyboard,
     this.onTapSend,
+    this.onTapTool
   });
 
   @override
@@ -46,6 +48,19 @@ class ChatTextField extends StatelessWidget {
               onTap: onTapKeyboard,
               child: const BudIcon(
                 icon: AssetsUtil.icon_keyboard,
+                size: 22,
+              ),
+            ),
+          ),
+          SizedBox(width: 12.sp),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 13),
+            child: InkWell(
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              onTap: onTapTool,
+              child: const Icon(
+                Icons.settings_suggest_sharp,
                 size: 22,
               ),
             ),

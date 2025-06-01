@@ -10,6 +10,7 @@ class HomeBottomBar extends StatelessWidget {
 
   final GestureTapCallback? onTapSend;
   final GestureTapCallback? onTapKeyboard;
+  final GestureTapCallback? onTapTool;
 
   final GestureTapCallback? onTapLeft;
   final GestureTapCallback? onTapHelp;
@@ -24,6 +25,7 @@ class HomeBottomBar extends StatelessWidget {
     this.controller,
     this.onSubmitted,
     this.onTapSend,
+    this.onTapTool,
     this.onTapKeyboard,
     this.onTapLeft,
     this.onTapHelp,
@@ -44,6 +46,7 @@ class HomeBottomBar extends StatelessWidget {
           onTapKeyboard: onTapKeyboard,
           onSubmitted: onSubmitted,
           onTapSend: onTapSend,
+          onTapTool: onTapTool,
         ),
         SizedBox(height: 8.sp),
         Padding(

@@ -8,8 +8,10 @@ import 'dart:developer' as dev;
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../constants/city_around_the_globe.dart';
 import '../constants/voice_constants.dart';
 import '../models/record_entity.dart';
+import '../models/tool_button.dart';
 import '../services/chat_manager.dart';
 import 'package:uuid/uuid.dart';
 import '../services/objectbox_service.dart';
@@ -29,6 +31,7 @@ class ChatController extends ChangeNotifier {
   late final WebSocketChannel _mcpChannel;
   final Map<int, Completer<String>> _pendingRequests = {};
   late final StreamSubscription _mcpSubscription;
+  final ButtonModel _buttonModel = ButtonModel();
 
   final ValueNotifier<Set<String>> unReadMessageId = ValueNotifier({});
 
@@ -46,8 +49,15 @@ class ChatController extends ChangeNotifier {
     chatHelp = ChatManager();
     await chatManager.init(selectedModel: _selectedModel, systemPrompt: '$systemPromptOfChat\n\n${systemPromptOfScenario['text']}');
     await chatHelp.init(selectedModel: _selectedModel, systemPrompt:  systemPromptOfHelp);
-    _mcpChannel = WebSocketChannel.connect(Uri.parse('ws://10.0.2.2:8080'));
+    _mcpChannel = WebSocketChannel.connect(Uri.parse('ws://10.0.2.2:8080'))
+      ..stream.handleError((error){
+        print('WebSocket error: $error');
+      })
+      ..sink.done.then((_) => print('WebSocket closed'));
+
+    print('Connecting to MCP server...');
     _mcpSubscription = _mcpChannel.stream.listen((message) {
+      print('Received from MCP: $message');
       final response = jsonDecode(message);
       final id = response['id'];
       final completer = _pendingRequests[id];
@@ -60,13 +70,32 @@ class ChatController extends ChangeNotifier {
         }
         _pendingRequests.remove(id);
       }
-    });
+    }, onError: (error) {
+      print('### MCP ERROR: ${error.runtimeType}');
+      if (error is WebSocketChannelException) {
+        print('Socket error details: ${error.message}');
+      }
+    },
+    onDone: () => print('### MCP CONNECTION CLOSED'),
+    cancelOnError: true
+    );
 
     await loadMoreMessages(reset: true);
     FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
   }
 
+  Future<void> testMcpConnection() async {
+    try {
+      final response = await _callMCPTool('get-alerts', {'state': 'CA'});
+      print('=== MCP TEST RESPONSE ===');
+      print('MCP test response: $response');
+    } catch (e) {
+      print('!!! MCP TEST FAILED: $e');
+    }
+  }
+
   Future<String> _callMCPTool(String method, Map<String, dynamic> params) async {
+    print('Inside _callMCPTool');
     final requestId = DateTime.now().microsecondsSinceEpoch;
     final completer = Completer<String>();
     _pendingRequests[requestId] = completer;
@@ -78,7 +107,9 @@ class ChatController extends ChangeNotifier {
       'params': params,
     }));
 
-    return await completer.future;
+    String result = await completer.future;
+    print('Finish process, return result: $result');
+    return result;
   }
 
   Future<void> loadMoreMessages({bool reset = false}) async {
@@ -290,56 +321,126 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  Future<void> onTapTool() async{
+
+  }
+
+  void onButtonTap() {
+    _buttonModel.toggle();
+  }
+
+  void setValue(bool newValue) {
+    _buttonModel.setValue(newValue);
+  }
+
+  bool _containsToolCommand(String input) {
+    final lowered = input.toLowerCase();
+    return lowered.contains('use tool') ||
+        lowered.contains('run tool') ||
+        lowered.contains('with the tool') ||
+        lowered.contains('use the tool');
+  }
+
+  String? _extractToolName(String input) {
+    if (input.toLowerCase().contains('weather')) return 'get-forecast';
+    if (input.toLowerCase().contains('news')) return 'news';
+    if (input.toLowerCase().contains('map')) return 'map';
+    return null;
+  }
+
+  String? _extractCityName(String input) {
+    final lower = input.toLowerCase();
+    for (final city in famousCities) {
+      final nameLower = city.toLowerCase();
+      final pattern = RegExp(r'\b' + RegExp.escape(nameLower) + r'\b');
+      if (pattern.hasMatch(lower)) {
+        return city;
+      }
+    }
+    return null;
+  }
+
   Future<void> _getBotResponse(String userInput, {bool isHelp = false}) async {
     try {
       tryNotifyListeners();
+      String? responseId = const Uuid().v4();
+      print('User input $userInput');
+      print('ResponseId: $responseId');
 
-      String? responseId;
+      newMessages.insert(0, {
+        'id': responseId,
+        'text': isHelp ? helpMessage : 'Checking weather information...',
+        'isUser': 'assistant',
+      });
+      tryNotifyListeners();
+      firstScrollToBottom();
+
+      if (_containsToolCommand(userInput)) {
+        final tool = _extractToolName(userInput) ?? 'get-forecast';
+        final foundCity = _extractCityName(userInput) ?? "";
+        final args = {
+          'city': foundCity,
+        };
+        print('Detected tool command → Calling _callMCPTool with: $tool, args: $args');
+
+        final result = await _callMCPTool(tool, args);
+        updateMessageText(responseId, result, isFinal: true);
+
+        _objectBoxService.insertDialogueRecord(RecordEntity(
+          role: 'assistant',
+          content: result,
+        ));
+        chatManager.addChatSession('assistant', result);
+        return;
+      }
+
+      final locationInfo = _extractCityName(userInput);
+      print('Location info: $locationInfo');
 
       final chatResponse = isHelp ? chatHelp : chatManager;
+      print('chatResponse: $chatResponse');
 
       chatResponse.createStreamingRequest(text: userInput).listen(
             (jsonString) async {
           try {
             final jsonObj = jsonDecode(jsonString);
             bool isInBottom = checkInBottom();
-
-            if (responseId == null) {
-              responseId = const Uuid().v4();
-              if (isHelp) {
-                newMessages.insert(
-                    0, {'id': responseId, 'text': helpMessage, 'isUser': 'assistant'});
-              } else{
-                newMessages.insert(
-                    0, {'id': responseId, 'text': '', 'isUser': 'assistant'});
-              }
-            }
+            print('Inside chatResponse streaming request');
+            print('jsonObj: $jsonObj');
 
             if (jsonObj.containsKey('delta')) {
+              print('Inside jsonObj contain delta');
               final delta = jsonObj['delta'];
-              updateMessageText(responseId!, delta, isHelp: isHelp);
-            }else if (jsonObj.containsKey['tool']){
-              final tool = jsonObj['tool'];
-              final args = jsonObj['args'] ?? {};
+              print('delta: $delta');
+              updateMessageText(responseId, delta, isHelp: isHelp);
+
+            } else if (jsonObj.containsKey('tool')) {
+              print('Inside jsonObj contain tool');
+              final tool = jsonObj['tool'] as String;
+              final args = (jsonObj['args'] as Map<String, dynamic>?) ?? {};
+              print('Parameters pass to mcp tool, tool: $tool, args: $args');
+
               final result = await _callMCPTool(tool, args);
-              updateMessageText(responseId!, result);
+              print('MCP result: $result');
+              updateMessageText(responseId, result);
+
             }
 
             if (jsonObj['isFinished'] == true) {
-              final completeResponse = jsonObj['content'];
-              updateMessageText(responseId!, completeResponse,
-                  isFinal: true, isHelp: isHelp);
-              responseId = null;
+              final completeResponse = jsonObj['content'] as String;
+              print('Response: $completeResponse');
+              updateMessageText(responseId, completeResponse, isFinal: true);
 
-              _objectBoxService.insertDialogueRecord(RecordEntity(
-                  role: 'assistant', content: completeResponse));
+              _objectBoxService.insertDialogueRecord(
+                RecordEntity(role: 'assistant', content: completeResponse),
+              );
               chatManager.addChatSession('assistant', completeResponse);
             }
             if (isInBottom) {
               firstScrollToBottom();
             }
           } catch (e) {
-            updateMessageText(responseId!, 'Error parsing response');
+            updateMessageText(responseId, 'Error parsing response');
           }
         },
         onDone: () {},
@@ -347,28 +448,20 @@ class ChatController extends ChangeNotifier {
           String errorInfo = error.toString();
           errorInfo = 'Your usage quota has been exhausted.';
           bool isInBottom = checkInBottom();
-          if (responseId != null) {
-            updateMessageText(responseId!, 'Error: $errorInfo');
-          } else {
-            newMessages.insert(0, {
-              'id': const Uuid().v4(),
-              'text': 'Error: $errorInfo',
-              'isUser': 'assistant'
-            });
-          }
-          tryNotifyListeners();
+          updateMessageText(responseId, 'Error: $errorInfo');
+                  tryNotifyListeners();
           if (isInBottom) {
             firstScrollToBottom();
           }
         },
       );
     } catch (e) {
+      final errorId = const Uuid().v4();
       newMessages.insert(0, {
-        'id': Uuid().v4(),
+        'id': const Uuid().v4(),
         'text': 'Error: ${e.toString()}',
         'isUser': 'assistant'
       });
-
       tryNotifyListeners();
     }
   }
@@ -377,7 +470,10 @@ class ChatController extends ChangeNotifier {
       {bool isFinal = false, bool isHelp = false}) {
     int index = newMessages.indexWhere((msg) => msg['id'] == messageId);
     if (index != -1) {
-      if (!isFinal) {
+      if (text.startsWith("Active alerts") || text.startsWith("Forecast")) {
+        newMessages[index]['text'] = text;
+      }
+      else if (!isFinal) {
         newMessages[index]['text'] += text;
       } else {
         newMessages[index]['text'] = isHelp ? helpMessage + text : text;
@@ -408,6 +504,7 @@ class ChatController extends ChangeNotifier {
     );
   }
 
+  @override
   void dispose() {
     super.dispose();
     textController.dispose();

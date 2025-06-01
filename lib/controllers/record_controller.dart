@@ -94,9 +94,9 @@ class RecordScreenController {
       callback: startRecordService,
     );
 
-    if (!result.success) {
-      throw result.error ?? Exception('An error occurred and the service could not be started.');
-    } 
+    // if (!result.success) {
+    //   throw result.error ?? Exception('An error occurred and the service could not be started.');
+    // }
   }
 
   Future<void> stopService() async {
@@ -106,9 +106,9 @@ class RecordScreenController {
 
     final ServiceRequestResult result = await FlutterForegroundTask.stopService();
 
-    if (!result.success) {
-      throw result.error ?? Exception('An error occurred and the service could not be stopped.');
-    }
+    // if (!result.success) {
+    //   throw result.error ?? Exception('An error occurred and the service could not be stopped.');
+    // }
   }
 
   void _onReceiveTaskData(Object data) {

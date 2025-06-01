@@ -245,6 +245,10 @@ class _HomeChatScreenState extends State<HomeChatScreen>
     _chatController.sendMessage();
   }
 
+  void _onClickTool(){
+
+  }
+
   void _onClickHelp() {
     _chatController.askHelp();
   }
