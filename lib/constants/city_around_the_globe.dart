@@ -5,6 +5,7 @@ const List<String> famousCities = [
   "Paris",
   "Tokyo",
   "Beijing",
+  "Shanghai",
   "Mumbai",
   "Dubai",
   "Sydney",

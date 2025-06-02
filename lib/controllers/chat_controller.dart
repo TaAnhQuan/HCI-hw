@@ -376,6 +376,7 @@ class ChatController extends ChangeNotifier {
       if (_toolButtonModel.isOn == true) {
         final tool = _extractToolName(userInput) ?? 'get-forecast';
         final foundCity = _extractCityName(userInput) ?? "";
+        print('Found city $foundCity');
         final args = {
           'city': foundCity,
         };
