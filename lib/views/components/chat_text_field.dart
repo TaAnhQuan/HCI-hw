@@ -48,10 +48,8 @@ class _ChatTextFieldState extends State<ChatTextField> {
   }
 
   void _handleToolTap() {
-    // 1) Toggle the model so AnimatedBuilder rebuilds with new color
     _toolModel.toggle();
 
-    // 2) If caller passed an onTapTool, invoke it too
     widget.onTapTool?.call();
   }
 

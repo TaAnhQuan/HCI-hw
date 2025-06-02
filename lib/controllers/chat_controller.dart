@@ -371,8 +371,9 @@ class ChatController extends ChangeNotifier {
       });
       tryNotifyListeners();
       firstScrollToBottom();
+      print('Tool Button object state ${_toolButtonModel.isOn}');
 
-      if (_containsToolCommand(userInput)) {
+      if (_toolButtonModel.isOn == true) {
         final tool = _extractToolName(userInput) ?? 'get-forecast';
         final foundCity = _extractCityName(userInput) ?? "";
         final args = {
